@@ -1,9 +1,9 @@
-ROM gitpod/workspace-full
+FROM gitpod/workspace-full
 
-RUN git clone "https://github.com/emscripten-core/emsdk.git" $HOME/.emsdk \
-    && cd $HOME/.emsdk \
-    && ./emsdk install latest \
-    && ./emsdk activate latest \
-    && bash -c "source ./emsdk_env.sh"
+RUN git clone "https://github.com/emscripten-core/emsdk.git" /home/gitpod/.emsdk \
+&& cd $HOME/.emsdk \
+&& ./emsdk install latest \
+&& ./emsdk activate latest \
+&& bash -c "source /home/gitpod/.emsdk/emsdk_env.sh"
 
-RUN printf "\nsource $HOME/.emsdk/emsdk_env.sh\nclear\n" >> ~/.bashrc
+RUN printf "\nsource /home/gitpod/.emsdk/emsdk_env.sh\nclear\n" >> $HOME/.bash_profile
