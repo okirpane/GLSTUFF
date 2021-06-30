@@ -2201,7 +2201,7 @@ var ASM_CONSTS = {
           var contextAttributes = {
             antialias: false,
             alpha: false,
-            majorVersion: 2,
+            majorVersion: (typeof WebGL2RenderingContext !== 'undefined') ? 2 : 1,
           };
   
           if (webGLContextAttributes) {
@@ -2571,6 +2571,38 @@ var ASM_CONSTS = {
         return handle;
       }};
   
+  function __webgl_enable_ANGLE_instanced_arrays(ctx) {
+      // Extension available in WebGL 1 from Firefox 26 and Google Chrome 30 onwards. Core feature in WebGL 2.
+      var ext = ctx.getExtension('ANGLE_instanced_arrays');
+      if (ext) {
+        ctx['vertexAttribDivisor'] = function(index, divisor) { ext['vertexAttribDivisorANGLE'](index, divisor); };
+        ctx['drawArraysInstanced'] = function(mode, first, count, primcount) { ext['drawArraysInstancedANGLE'](mode, first, count, primcount); };
+        ctx['drawElementsInstanced'] = function(mode, count, type, indices, primcount) { ext['drawElementsInstancedANGLE'](mode, count, type, indices, primcount); };
+        return 1;
+      }
+    }
+  
+  function __webgl_enable_OES_vertex_array_object(ctx) {
+      // Extension available in WebGL 1 from Firefox 25 and WebKit 536.28/desktop Safari 6.0.3 onwards. Core feature in WebGL 2.
+      var ext = ctx.getExtension('OES_vertex_array_object');
+      if (ext) {
+        ctx['createVertexArray'] = function() { return ext['createVertexArrayOES'](); };
+        ctx['deleteVertexArray'] = function(vao) { ext['deleteVertexArrayOES'](vao); };
+        ctx['bindVertexArray'] = function(vao) { ext['bindVertexArrayOES'](vao); };
+        ctx['isVertexArray'] = function(vao) { return ext['isVertexArrayOES'](vao); };
+        return 1;
+      }
+    }
+  
+  function __webgl_enable_WEBGL_draw_buffers(ctx) {
+      // Extension available in WebGL 1 from Firefox 28 onwards. Core feature in WebGL 2.
+      var ext = ctx.getExtension('WEBGL_draw_buffers');
+      if (ext) {
+        ctx['drawBuffers'] = function(n, bufs) { ext['drawBuffersWEBGL'](n, bufs); };
+        return 1;
+      }
+    }
+  
   function __webgl_enable_WEBGL_draw_instanced_base_vertex_base_instance(ctx) {
       // Closure is expected to be allowed to minify the '.dibvbi' property, so not accessing it quoted.
       return !!(ctx.dibvbi = ctx.getExtension('WEBGL_draw_instanced_base_vertex_base_instance'));
@@ -2704,6 +2736,16 @@ var ASM_CONSTS = {
           }
         }
         return source;
+      },enabledClientAttribIndices:[],enableVertexAttribArray:function enableVertexAttribArray(index) {
+        if (!GL.enabledClientAttribIndices[index]) {
+          GL.enabledClientAttribIndices[index] = true;
+          GLctx.enableVertexAttribArray(index);
+        }
+      },disableVertexAttribArray:function disableVertexAttribArray(index) {
+        if (GL.enabledClientAttribIndices[index]) {
+          GL.enabledClientAttribIndices[index] = false;
+          GLctx.disableVertexAttribArray(index);
+        }
       },createContext:function(canvas, webGLContextAttributes) {
   
         // BUG: Workaround Safari WebGL issue: After successfully acquiring WebGL context on a canvas,
@@ -2719,7 +2761,14 @@ var ASM_CONSTS = {
           }
         }
   
-        var ctx = canvas.getContext("webgl2", webGLContextAttributes);
+        var ctx = 
+          (webGLContextAttributes.majorVersion > 1)
+          ?
+            canvas.getContext("webgl2", webGLContextAttributes)
+          :
+          (canvas.getContext("webgl", webGLContextAttributes)
+            // https://caniuse.com/#feat=webgl
+            );
   
         if (!ctx) return 0;
   
@@ -2770,6 +2819,10 @@ var ASM_CONSTS = {
         context.compressionExt = GLctx.getExtension('WEBGL_compressed_texture_s3tc');
         context.anisotropicExt = GLctx.getExtension('EXT_texture_filter_anisotropic');
   
+        // Extensions that are only available in WebGL 1 (the calls will be no-ops if called on a WebGL 2 context active)
+        __webgl_enable_ANGLE_instanced_arrays(GLctx);
+        __webgl_enable_OES_vertex_array_object(GLctx);
+        __webgl_enable_WEBGL_draw_buffers(GLctx);
         // Extensions that are available from WebGL >= 2 (no-op if called on a WebGL 1 context active)
         __webgl_enable_WEBGL_draw_instanced_base_vertex_base_instance(GLctx);
         __webgl_enable_WEBGL_multi_draw_instanced_base_vertex_base_instance(GLctx);
@@ -2987,7 +3040,7 @@ var ASM_CONSTS = {
           case 0x1F02 /* GL_VERSION */:
             var glVersion = GLctx.getParameter(0x1F02 /*GL_VERSION*/);
             // return GLES version string corresponding to the version of the WebGL context
-            if (true) glVersion = 'OpenGL ES 3.0 (' + glVersion + ')';
+            if (GL.currentContext.version >= 2) glVersion = 'OpenGL ES 3.0 (' + glVersion + ')';
             else
             {
               glVersion = 'OpenGL ES 2.0 (' + glVersion + ')';
@@ -3175,6 +3228,7 @@ var ASM_CONSTS = {
   
         // Add some emulation workarounds
         err('WARNING: using emscripten GL emulation. This is a collection of limited workarounds, do not expect it to work.');
+        err('WARNING: using emscripten GL emulation unsafe opts. If weirdness happens, try -s GL_UNSAFE_OPTS=0');
   
         // XXX some of the capabilities we don't support may lead to incorrect rendering, if we do not emulate them in shaders
         var validCapabilities = {
@@ -4861,6 +4915,9 @@ var ASM_CONSTS = {
           GLImmediate.enabledClientAttributes[name] = true;
           GLImmediate.setClientAttribute(name, size, type, 0, GLImmediate.rendererComponentPointer);
           GLImmediate.rendererComponentPointer += size * GL.byteSizeByType[type - GL.byteSizeByTypeRoot];
+          // We can enable the correct attribute stream index immediately here, since the same attribute in each shader
+          // will be bound to this same index.
+          GL.enableVertexAttribArray(name);
         } else {
           GLImmediate.rendererComponents[name]++;
         }
@@ -4919,11 +4976,7 @@ var ASM_CONSTS = {
   
         keyView.next(enabledAttributesKey);
   
-        // By cur program:
-        keyView.next(GL.currProgram);
-        if (!GL.currProgram) {
           GLImmediate.TexEnvJIT.traverseState(keyView);
-        }
   
         // If we don't already have it, create it.
         var renderer = keyView.get();
@@ -5276,6 +5329,16 @@ var ASM_CONSTS = {
               arrayBuffer = GLctx.currentArrayBufferBinding;
             }
   
+            // If the array buffer is unchanged and the renderer as well, then we can avoid all the work here
+            // XXX We use some heuristics here, and this may not work in all cases. Try disabling GL_UNSAFE_OPTS if you
+            // have odd glitches
+            var lastRenderer = GLImmediate.lastRenderer;
+            var canSkip = this == lastRenderer &&
+                          arrayBuffer == GLImmediate.lastArrayBuffer &&
+                          (GL.currProgram || this.program) == GLImmediate.lastProgram &&
+                          GLImmediate.stride == GLImmediate.lastStride &&
+                          !GLImmediate.matricesModified;
+            if (!canSkip && lastRenderer) lastRenderer.cleanup();
             if (!GLctx.currentArrayBufferBinding) {
               // Bind the array buffer and upload data after cleaning up the previous renderer
   
@@ -5286,6 +5349,11 @@ var ASM_CONSTS = {
   
               GLctx.bufferSubData(GLctx.ARRAY_BUFFER, start, GLImmediate.vertexData.subarray(start >> 2, end >> 2));
             }
+            if (canSkip) return;
+            GLImmediate.lastRenderer = this;
+            GLImmediate.lastProgram = GL.currProgram || this.program;
+            GLImmediate.lastStride == GLImmediate.stride;
+            GLImmediate.matricesModified = false;
   
             if (!GL.currProgram) {
               if (GLImmediate.fixedFunctionProgram != this.program) {
@@ -5314,26 +5382,24 @@ var ASM_CONSTS = {
             var clientAttributes = GLImmediate.clientAttributes;
             var posAttr = clientAttributes[GLImmediate.VERTEX];
   
-            GLctx.vertexAttribPointer(this.positionLocation, posAttr.size, posAttr.type, false, GLImmediate.stride, posAttr.offset);
-            GLctx.enableVertexAttribArray(this.positionLocation);
-            if (this.hasNormal) {
-              var normalAttr = clientAttributes[GLImmediate.NORMAL];
-              GLctx.vertexAttribPointer(this.normalLocation, normalAttr.size, normalAttr.type, true, GLImmediate.stride, normalAttr.offset);
-              GLctx.enableVertexAttribArray(this.normalLocation);
+            if (!GLctx.currentArrayBufferBinding) {
+              GLctx.vertexAttribPointer(GLImmediate.VERTEX, posAttr.size, posAttr.type, false, GLImmediate.stride, posAttr.offset);
+              if (this.hasNormal) {
+                var normalAttr = clientAttributes[GLImmediate.NORMAL];
+                GLctx.vertexAttribPointer(GLImmediate.NORMAL, normalAttr.size, normalAttr.type, true, GLImmediate.stride, normalAttr.offset);
+              }
             }
             if (this.hasTextures) {
               for (var i = 0; i < GLImmediate.MAX_TEXTURES; i++) {
-                var attribLoc = this.texCoordLocations[i];
-                if (attribLoc === undefined || attribLoc < 0) continue;
-                var texAttr = clientAttributes[GLImmediate.TEXTURE0+i];
-  
-                if (texAttr.size) {
-                  GLctx.vertexAttribPointer(attribLoc, texAttr.size, texAttr.type, false, GLImmediate.stride, texAttr.offset);
-                  GLctx.enableVertexAttribArray(attribLoc);
-                } else {
-                  // These two might be dangerous, but let's try them.
-                  GLctx.vertexAttrib4f(attribLoc, 0, 0, 0, 1);
-                  GLctx.disableVertexAttribArray(attribLoc);
+                if (!GLctx.currentArrayBufferBinding) {
+                  var attribLoc = GLImmediate.TEXTURE0+i;
+                  var texAttr = clientAttributes[attribLoc];
+                  if (texAttr.size) {
+                    GLctx.vertexAttribPointer(attribLoc, texAttr.size, texAttr.type, false, GLImmediate.stride, texAttr.offset);
+                  } else {
+                    // These two might be dangerous, but let's try them.
+                    GLctx.vertexAttrib4f(attribLoc, 0, 0, 0, 1);
+                  }
                 }
                 var t = 2/*t*/+i;
                 if (this.textureMatrixLocations[i] && this.textureMatrixVersion[t] != GLImmediate.matrixVersion[t]) { // XXX might we need this even without the condition we are currently in?
@@ -5344,12 +5410,9 @@ var ASM_CONSTS = {
             }
             if (GLImmediate.enabledClientAttributes[GLImmediate.COLOR]) {
               var colorAttr = clientAttributes[GLImmediate.COLOR];
-              GLctx.vertexAttribPointer(this.colorLocation, colorAttr.size, colorAttr.type, true, GLImmediate.stride, colorAttr.offset);
-              GLctx.enableVertexAttribArray(this.colorLocation);
-            }
-            else if (this.hasColor) {
-              GLctx.disableVertexAttribArray(this.colorLocation);
-              GLctx.vertexAttrib4fv(this.colorLocation, GLImmediate.clientColor);
+              if (!GLctx.currentArrayBufferBinding) {
+                GLctx.vertexAttribPointer(GLImmediate.COLOR, colorAttr.size, colorAttr.type, true, GLImmediate.stride, colorAttr.offset);
+              }
             }
             if (this.hasFog) {
               if (this.fogColorLocation) GLctx.uniform4fv(this.fogColorLocation, GLEmulation.fogColor);
@@ -5387,30 +5450,6 @@ var ASM_CONSTS = {
           },
   
           cleanup: function cleanup() {
-            GLctx.disableVertexAttribArray(this.positionLocation);
-            if (this.hasTextures) {
-              for (var i = 0; i < GLImmediate.MAX_TEXTURES; i++) {
-                if (GLImmediate.enabledClientAttributes[GLImmediate.TEXTURE0+i] && this.texCoordLocations[i] >= 0) {
-                  GLctx.disableVertexAttribArray(this.texCoordLocations[i]);
-                }
-              }
-            }
-            if (this.hasColor) {
-              GLctx.disableVertexAttribArray(this.colorLocation);
-            }
-            if (this.hasNormal) {
-              GLctx.disableVertexAttribArray(this.normalLocation);
-            }
-            if (!GL.currProgram) {
-              GLctx.useProgram(null);
-              GLImmediate.fixedFunctionProgram = 0;
-            }
-            if (!GLctx.currentArrayBufferBinding) {
-              GLctx.bindBuffer(GLctx.ARRAY_BUFFER, null);
-              GLImmediate.lastArrayBuffer = null;
-            }
-  
-            GLImmediate.matricesModified = true;
           }
         };
         ret.init();
@@ -5709,7 +5748,6 @@ var ASM_CONSTS = {
           GLctx.bindBuffer(GLctx.ELEMENT_ARRAY_BUFFER, GL.buffers[GLctx.currentElementArrayBufferBinding] || null);
         }
   
-        renderer.cleanup();
       }};
   GLImmediate.matrixLib = (function() {
   
@@ -7691,6 +7729,7 @@ var ASM_CONSTS = {
         GLImmediate.clientColor[1] = g;
         GLImmediate.clientColor[2] = b;
         GLImmediate.clientColor[3] = a;
+        GLctx.vertexAttrib4fv(GLImmediate.COLOR, GLImmediate.clientColor);
       }
     }
   function _glColor3f(r, g, b) {
@@ -8176,10 +8215,10 @@ var ___wasm_call_ctors = Module["___wasm_call_ctors"] = createExportWrapper("__w
 var _main = Module["_main"] = createExportWrapper("main");
 
 /** @type {function(...*):?} */
-var ___errno_location = Module["___errno_location"] = createExportWrapper("__errno_location");
+var _fflush = Module["_fflush"] = createExportWrapper("fflush");
 
 /** @type {function(...*):?} */
-var _fflush = Module["_fflush"] = createExportWrapper("fflush");
+var ___errno_location = Module["___errno_location"] = createExportWrapper("__errno_location");
 
 /** @type {function(...*):?} */
 var stackSave = Module["stackSave"] = createExportWrapper("stackSave");
